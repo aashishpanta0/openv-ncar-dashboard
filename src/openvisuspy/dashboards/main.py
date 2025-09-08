@@ -7,6 +7,7 @@ import panel as pn
 
 sys.path.append('/Users/aashish/Research/github/test/openvpy/src')
 sys.path.append('/glade/work/dpanta/github/openvpy/src')
+sys.path.append('/glade/work/dpanta/github/openv-ncar-dashboard/src')
 from openvisuspy import SetupLogger, Slice, ProbeTool, GetQueryParams
 
 class DashboardApp:
