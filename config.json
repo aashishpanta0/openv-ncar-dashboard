@@ -1,0 +1,11 @@
+{
+    "scene":
+    [
+        {
+            "name":"NEX_GDDP_CMIP6",
+            "url": "http://atlantis.sci.utah.edu/mod_visus?dataset=nex-gddp-cmip6&cached=arco"
+            }
+        
+]
+
+}
