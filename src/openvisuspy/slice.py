@@ -1283,7 +1283,7 @@ class Slice(param.Parameterized):
         palette_name = self.palette.value_name if self.palette.value_name.endswith("256") else "Turbo256"
         mapper = LinearColorMapper(palette=palette_name, low=np.nanmin(self.detailed_data), high=np.nanmax(self.detailed_data))
         data_flipped = np.ascontiguousarray(data[::-1, :])
-        source = ColumnDataSource(data=dict(image=[data_flipped]))
+        source = ColumnDataSource(data=dict(image=[data]))
         dw = abs(self.selected_physic_box[0][1] -self.selected_physic_box[0][0])
         dh = abs(self.selected_physic_box[1][1] - self.selected_physic_box[1][0])
         p.image(image='image', x=self.selected_physic_box[0][0], y=self.selected_physic_box[1][0], dw=dw, dh=dh, color_mapper=mapper, source=source)  

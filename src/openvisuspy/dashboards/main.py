@@ -35,11 +35,11 @@ class DashboardApp:
                         align-items: center; box-sizing: border-box;">
                 <div style="flex-grow: 1;">
                     <h2 style="margin: 0; font-size: 1.2em; line-height: 1.1;">
-                        NEX-GDDP-CMIP6 Dashboard
+                        ERA5 Interactive Dashboard
                     </h2>
                 </div>
                 <div style="text-align: right; font-size: 11px; line-height: 1.1;">
-                    Powered by <a href="https://www.jpl.nasa.gov/" target="_blank">NASA JPL</a> and
+                    Powered by <a href="https://www.gdex.ucar.edu" target="_blank">NSF NCAR</a> and
                     <a href="https://nationalsciencedatafabric.org/" target="_blank">National Science Data Fabric (NSDF)</a>
                 </div>
             </div>
