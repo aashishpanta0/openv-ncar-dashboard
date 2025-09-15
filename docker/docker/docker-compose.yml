@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.era5-2T
+    image: openv-ncar-dashboard:latest
+    container_name: openv-ncar-dashboard
+    ports:
+      - "8000:8000"
+    environment:
+      PANEL_PORT: "8000"
+      ALLOW_ORIGIN: "*"
+      IDX_PATH: "/data/era5_sfc_2T_zip.idx"
+    volumes:
+      - /glade/campaign/work/dpanta/era5/idx/2T:/data:ro
+    restart: unless-stopped
+

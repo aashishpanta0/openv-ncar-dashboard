@@ -1,3 +1,4 @@
+.local/
 .venv/
 **/.ipynb_checkpoints/
 **/__pycache__/
