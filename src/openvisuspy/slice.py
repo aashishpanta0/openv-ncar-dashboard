@@ -1,4 +1,4 @@
-import os, sys, logging, copy, traceback, base64, asyncio, io, time, threading
+import os, sys, logging, copy, traceback, base64, asyncio, io, time, threading, json
 import types
 from urllib.parse import urlparse, urlencode
 from datetime import datetime, timedelta
@@ -6,16 +6,15 @@ from datetime import datetime, timedelta
 import numpy as np
 import panel as pn
 from panel.layout import FloatPanel
-from panel import Column, Row, GridBox, Card
-from panel.pane import HTML, JSON, Bokeh
+from panel import Column, Row, Card
+from panel.pane import HTML, JSON as JSONPane, Bokeh
 
 import bokeh
 import bokeh.models
 import bokeh.events
 import bokeh.plotting
-import bokeh.models.callbacks
 from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, ColorBar, LinearColorMapper, HoverTool, CustomJS
+from bokeh.models import ColumnDataSource, ColorBar, LinearColorMapper, HoverTool
 
 import param
 
@@ -187,9 +186,7 @@ class Canvas:
             self.box_select_tool_helper.on_change('value', handleSelectionGeometry)
             self.fig.js_on_event(bokeh.events.SelectionGeometry, bokeh.models.callbacks.CustomJS(
                 args=dict(widget=self.box_select_tool_helper), 
-                code="""
-                    widget.value=JSON.stringify(cb_obj.geometry, undefined, 2);
-                """
+                code="""widget.value=JSON.stringify(cb_obj.geometry, undefined, 2);"""
             ))
 
     def setAxisLabels(self,x,y):
@@ -280,10 +277,9 @@ class Slice(param.Parameterized):
         self.time_day   = pn.widgets.Select(name="Date", options=[i for i in range(1,32)], sizing_mode="stretch_width")
         self.time_hour  = pn.widgets.Select(name="Hour", options=[i for i in range(0,24)], sizing_mode="stretch_width")
 
-        # Playback / field
-        self.timestep_delta = pn.widgets.Select(name="Speed", options=[1, 2, 4, 8, 16, 32, 64, 128], value=1, width=50)
+        # Field
         self.field = pn.widgets.Select(name='Field', options=['2T'], value='2T', width=80)
-        self.field.visible = False  # fixed field, hide if you want
+        self.field.visible = False  # fixed field, hide if desired
 
         # View / query
         self.resolution = pn.widgets.IntSlider(name='Resolution', value=15, start=15, end=22, sizing_mode="stretch_width")
@@ -298,7 +294,7 @@ class Slice(param.Parameterized):
         self.region_button = pn.widgets.Button(name="Turn on Regional Setting", button_type="success", width=100)
         self.region_stats_button = pn.widgets.Button(name='Show Regional Stats', visible=False, margin=(5,10,10,50))
 
-        # Extra features still supported
+        # Extras
         self.generate_insights_button = pn.widgets.Button(name="Turn on AI Insights", button_type="success", width=100, margin=(5,10,10,70))
 
         # Palette / range
@@ -309,6 +305,7 @@ class Slice(param.Parameterized):
         self.color_mapper_type = pn.widgets.Select(name="Mapper", options=["linear", "log"], width=60)
 
         # Transport & misc
+        self.timestep_delta = pn.widgets.Select(name="Speed", options=[1, 2, 4, 8, 16, 32, 64, 128], value=1, width=50)
         self.play_button = pn.widgets.Button(name="Play", width=10, sizing_mode='stretch_width')
         self.play_sec = pn.widgets.Select(name="Frame delay", options=[0.00, 0.01, 0.1, 0.2, 0.1, 1, 2], value=0.01, width=120)
         self.request = pn.widgets.TextInput(name="", sizing_mode='stretch_width', disabled=False)
@@ -340,7 +337,7 @@ class Slice(param.Parameterized):
         self.regional_setting_enabled = False
         self.ai_insights_enabled = False
 
-        # Buttons: stats panel toggles
+        # Buttons: stats/regional/insights toggles
         def toggle_stats(event):
             if self.stats_panel.visible:
                 self.stats_panel.visible = False
@@ -464,16 +461,26 @@ class Slice(param.Parameterized):
             mnum = datetime.strptime(self.time_month.value, "%b").month
             self.timestep.value = calculate_raw_time(self.time_year.value, mnum, self.time_day.value, self.time_hour.value)
 
+        # --- Leap-aware days in month: Feb 29 support ---
+        def _update_day_options_for_year_month():
+            sel_month_num = datetime.strptime(self.time_month.value, "%b").month
+            if sel_month_num == 12:
+                next_month = datetime(self.time_year.value + 1, 1, 1)
+            else:
+                next_month = datetime(self.time_year.value, sel_month_num + 1, 1)
+            this_month = datetime(self.time_year.value, sel_month_num, 1)
+            days_in_month = (next_month - this_month).days
+            self.time_day.options = list(range(1, days_in_month + 1))
+            if self.time_day.value > days_in_month:
+                self.time_day.value = days_in_month
+
         def onMonthChange(evt):
-            days = {'Jan':31,'Feb':28,'Mar':31,'Apr':30,'May':31,'Jun':30,
-                    'Jul':31,'Aug':31,'Sep':30,'Oct':31,'Nov':30,'Dec':31}
-            self.time_day.options = list(range(1, days[self.time_month.value] + 1))
-            if self.time_day.value > days[self.time_month.value]:
-                self.time_day.value = days[self.time_month.value]
+            _update_day_options_for_year_month()
             _recalc_timestep_from_widgets(); self.refresh()
         self.time_month.param.watch(SafeCallback(onMonthChange), "value", onlychanged=True, queued=True)
 
         def onYearChange(evt):
+            _update_day_options_for_year_month()
             _recalc_timestep_from_widgets(); self.refresh()
         self.time_year.param.watch(SafeCallback(onYearChange), "value", onlychanged=True, queued=True)
 
@@ -774,10 +781,10 @@ class Slice(param.Parameterized):
         urls = default_scene.get("urls",{})
 
         if "urls" in scene:
-            locals=[it for it in urls if it.get('id')=="local"]
-            if locals and os.path.isfile(locals[0]["url"]):
-                logger.info(f"id={self.id} Overriding url from {locals[0]['url']} since it exists and is local")
-                url = locals[0]["url"]
+            locals_ = [it for it in urls if it.get('id')=="local"]
+            if locals_ and os.path.isfile(locals_[0]["url"]):
+                logger.info(f"id={self.id} Overriding url from {locals_[0]['url']} since it exists and is local")
+                url = locals_[0]["url"]
 
         logger.info(f"id={self.id} LoadDataset url={url}...")
         db=LoadDataset(url=url) 
@@ -798,18 +805,34 @@ class Slice(param.Parameterized):
         self.timestep.step  = 1
 
         # Initialize Y/M/D/H from current timestep
-        y, m, d, h, _ = reverse_calculate_time(int(scene.get("timestep", self.db.getTimesteps()[0])))
-        self.time_year.options = list(range(y, y+1))  # set properly below once we decode bounds
-        # Better: compute min/max year from endpoints
+        init_ts = int(scene.get("timestep", self.db.getTimesteps()[0]))
+        y, m, d, h, _ = reverse_calculate_time(init_ts)
+
+        # Year range derived from dataset bounds
         y0, m0, d0, h0, _ = reverse_calculate_time(self.timestep.start)
         y1, m1, d1, h1, _ = reverse_calculate_time(self.timestep.end)
         self.time_year.options = list(range(y0, y1+1))
 
         self.time_year.value  = y
         self.time_month.value = datetime(2000, m, 1).strftime("%b")
+
+        # Clamp day options for month/year (leap-aware)
+        def _update_day_options_for_year_month():
+            sel_month_num = datetime.strptime(self.time_month.value, "%b").month
+            if sel_month_num == 12:
+                next_month = datetime(self.time_year.value + 1, 1, 1)
+            else:
+                next_month = datetime(self.time_year.value, sel_month_num + 1, 1)
+            this_month = datetime(self.time_year.value, sel_month_num, 1)
+            days_in_month = (next_month - this_month).days
+            self.time_day.options = list(range(1, days_in_month + 1))
+            if self.time_day.value > days_in_month:
+                self.time_day.value = days_in_month
+
         self.time_day.value   = d
+        _update_day_options_for_year_month()
         self.time_hour.value  = h
-        self.timestep.value   = int(scene.get("timestep", self.db.getTimesteps()[0]))
+        self.timestep.value   = init_ts
 
         # Logic/physic mapping
         pdim = self.getPointDim()
@@ -868,30 +891,31 @@ class Slice(param.Parameterized):
         metadata=body["scene"].get("metadata", [])
         cards=[]
         for I, item in enumerate(metadata):
-            type = item["type"]
+            type_ = item["type"]
             filename = item.get("filename",f"metadata_{I:02d}.bin")
-            if type == "b64encode":
+            if type_ == "b64encode":
                 body_b = base64.b64decode(item["encoded"]).decode("utf-8")
                 internal_panel=HTML(f"<div><pre><code>{body_b}</code></pre></div>",sizing_mode="stretch_width",height=400)
-            elif type=="json-object":
+                file_obj = io.StringIO(body_b)
+            elif type_=="json-object":
                 obj=item["object"]
-                internal_panel=JSON(obj,name="Object",depth=3, sizing_mode="stretch_width",height=400) 
+                internal_panel=JSONPane(obj,name="Object",depth=3, sizing_mode="stretch_width",height=400) 
+                file_obj = io.StringIO(json.dumps(obj))
             else:
                 continue
             cards.append(Card(
                 internal_panel,
-                pn.widgets.FileDownload(io.StringIO(body_b if type=="b64encode" else json.dumps(obj)),
-                                        embed=True, filename=filename, align="end"),
+                pn.widgets.FileDownload(file_obj, embed=True, filename=filename, align="end"),
                 title=filename, collapsed=(I>0), sizing_mode="stretch_width"
             ))
         self.showDialog(*cards)
 
     def showOpen(self):
         def onLoadClick(evt):
-            body=value.decode('ascii')
+            body=evt.new.decode('ascii') if evt.new else ""
             self.scene_body.value=body
             ShowInfoNotification('Load done. Press `Eval`')
-        file_input = pn.widgets.FileInput(description="Load", accept=".json")
+        file_input = pn.widgets.FileInput(accept=".json")
         file_input.param.watch(SafeCallback(onLoadClick),"value", onlychanged=True,queued=True)
 
         def onEvalClick(evt):
@@ -976,7 +1000,6 @@ class Slice(param.Parameterized):
         p1 = [vs[I] * p1[I] + vt[I] for I in range(pdim)]
         p2 = [vs[I] * p2[I] + vt[I] for I in range(pdim)]
         if pdim==1:
-            assert(len(p1)==1 and len(p2)==1)
             p1.append(0.0); p2.append(1.0)
         elif pdim==3:
             del p1[dir]; del p2[dir]
@@ -1097,6 +1120,11 @@ class Slice(param.Parameterized):
 
     def gotNewData(self, result):
         data=result['data']
+
+        # --- north-up rendering: flip latitude for display only ---
+        if data.ndim == 2:
+            data = np.ascontiguousarray(data[::-1, :])
+
         try:
             data_range=np.nanmin(data),np.nanmax(data)
         except:
@@ -1145,7 +1173,7 @@ class Slice(param.Parameterized):
                 bokeh.models.LogColorMapper   (palette=palette, low=mapper_low, high=mapper_high) if is_log else 
                 bokeh.models.LinearColorMapper(palette=palette, low=mapper_low, high=mapper_high)
             )
-        data = np.ascontiguousarray(data[::-1, :])
+
         self.canvas.showData(data, self.toPhysic(logic_box), color_bar=self.color_bar)
         self.stats_view.set_data(data)
         try:
@@ -1159,7 +1187,6 @@ class Slice(param.Parameterized):
         (X,Y,Z),(tX,tY,tZ)=self.getLogicAxis()
         self.canvas.setAxisLabels(tX,tY)
 
-        tot_pixels=np.prod(data.shape)
         self.H=result['H']
         query_status="running" if result['running'] else "FINISHED"
         self.response.value=" ".join([
@@ -1204,10 +1231,9 @@ class Slice(param.Parameterized):
                 max_pixels=canvas_w
             else:
                 delta=self.resolution.value-self.getMaxResolution()
-                a,b=self.resolution.value,self.getMaxResolution()
-                if a==b:
+                if self.resolution.value==self.getMaxResolution():
                     coeff=1.0
-                elif a<b:
+                elif self.resolution.value<self.getMaxResolution():
                     coeff=1.0/pow(1.3,abs(delta))
                 else:
                     coeff=1.0*pow(1.3,abs(delta))
@@ -1215,7 +1241,7 @@ class Slice(param.Parameterized):
 			
         self.scene_body.value=json.dumps(self.getSceneBody(),indent=2)
         timestep=int(self.timestep.value)
-        field="2T"  # <— the only field
+        field="2T"  # the only field
 
         box_i=[[int(it) for it in jt] for jt in query_logic_box]
         self.request.value=f"t={timestep} b={str(box_i).replace(' ','')} {canvas_w}x{canvas_h}"
@@ -1239,19 +1265,27 @@ class Slice(param.Parameterized):
     # ----- Selection details dialog -----
     def showDetails(self,evt=None):
         import openvisuspy as ovy
-        import panel as pn
 
         self.region_view.reset_view()
         x,y,w,h=evt.new
         z=int(self.offset.value)
-        logic_box=self.toLogic([x,y,w,h])
+        y_view_min = self.canvas.fig.y_range.start
+        y_view_max = self.canvas.fig.y_range.end
+        y_inv = (y_view_min + y_view_max) - (y + h)   # same height, mirrored vertically
+
+        # Use the inverted-Y viewport for logic mapping / query
+        logic_box = self.toLogic([x, y_inv, w, h])
         self.logic_box=logic_box
+        print(f'---------------------SELECTED LOGIC BOX---------------- . {self.logic_box}')
         data=list(ovy.ExecuteBoxQuery(self.db, access=self.db.createAccess(), field=self.field.value,
                                       timestep=self.timestep.value,logic_box=logic_box,num_refinements=1))[0]["data"]
         self.selected_logic_box=self.logic_box
         self.selected_physic_box=[[x,x+w],[y,y+h]]
+       
         self.detailed_data=data
 
+        # north-up in popup too
+        data_flipped = np.ascontiguousarray(data[::-1, :])
         save_numpy_button = pn.widgets.Button(name='Save Data as Numpy', button_type='primary')
         download_script_button = pn.widgets.Button(name='Download Script', button_type='primary')
         apply_colormap_button = pn.widgets.Button(name='Replace Existing Range', button_type='primary')
@@ -1281,16 +1315,16 @@ class Slice(param.Parameterized):
         p = figure(x_range=(self.selected_physic_box[0][0], self.selected_physic_box[0][1]),
                    y_range=(self.selected_physic_box[1][0], self.selected_physic_box[1][1]))
         palette_name = self.palette.value_name if self.palette.value_name.endswith("256") else "Turbo256"
-        mapper = LinearColorMapper(palette=palette_name, low=np.nanmin(self.detailed_data), high=np.nanmax(self.detailed_data))
-        data_flipped = np.ascontiguousarray(data[::-1, :])
-        source = ColumnDataSource(data=dict(image=[data]))
+        mapper = LinearColorMapper(palette=palette_name, low=np.nanmin(data_flipped), high=np.nanmax(data_flipped))
+        source = ColumnDataSource(data=dict(image=[data_flipped]))
         dw = abs(self.selected_physic_box[0][1] -self.selected_physic_box[0][0])
         dh = abs(self.selected_physic_box[1][1] - self.selected_physic_box[1][0])
-        p.image(image='image', x=self.selected_physic_box[0][0], y=self.selected_physic_box[1][0], dw=dw, dh=dh, color_mapper=mapper, source=source)  
+        p.image(image='image', x=self.selected_physic_box[0][0], y=self.selected_physic_box[1][0], dw=dw, dh=dh,
+                color_mapper=mapper, source=source)  
         self.region_view.reset_view()
-        self.region_view.set_latlon(data, self.selected_physic_box[0][0], self.selected_physic_box[1][0], dw, dh)
+        self.region_view.set_latlon(data_flipped, self.selected_physic_box[0][0], self.selected_physic_box[1][0], dw, dh)
 
-        try: self.region_stats_view.set_data(data) 
+        try: self.region_stats_view.set_data(data_flipped) 
         except: pass
 
         color_bar = ColorBar(color_mapper=mapper, label_standoff=12, location=(0,0))
