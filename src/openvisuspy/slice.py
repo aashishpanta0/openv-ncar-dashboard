@@ -46,7 +46,7 @@ DEFAULT_SHOW_OPTIONS = {
         ["scene", "time_year", "time_month", "time_day", "time_hour",
          "timestep_delta", "play_sec", "play_button", "palette", "color_mapper_type",
          "resolution", "view_dependent", "num_refinements", "show_probe"],
-        ["take_screenshot_button", "range_mode", "range_min", "range_max",
+        ["take_screenshot_button","direction","offset", "range_mode", "range_min", "range_max",
          "toggle_button", "region_button", "region_stats_button"]
     ],
     "bottom": [
@@ -277,12 +277,12 @@ class Slice(param.Parameterized):
         self.time_day   = pn.widgets.Select(name="Date", options=[i for i in range(1,32)], sizing_mode="stretch_width")
         self.time_hour  = pn.widgets.Select(name="Hour", options=[i for i in range(0,24)], sizing_mode="stretch_width")
 
-        # Field
-        self.field = pn.widgets.Select(name='Field', options=['2T'], value='2T', width=80)
-        self.field.visible = False  # fixed field, hide if desired
+        # Field (fixed)
+        self.field = pn.widgets.Select(name='Field', options=['T'], value='T', width=80)
+        self.field.visible = False
 
         # View / query
-        self.resolution = pn.widgets.IntSlider(name='Resolution', value=15, start=15, end=22, sizing_mode="stretch_width")
+        self.resolution = pn.widgets.IntSlider(name='Resolution', value=14, start=15, end=22, sizing_mode="stretch_width")
         self.view_dependent = pn.widgets.Select(name="ViewDep", options={"Yes": True, "No": False}, value=True, width=80)
         self.num_refinements = pn.widgets.IntSlider(name='#Ref', value=0, start=0, end=4, width=80)
         self.direction = pn.widgets.Select(name='Direction', options={'X': 0, 'Y': 1, 'Z': 2}, value=2, width=80)
@@ -526,6 +526,36 @@ class Slice(param.Parameterized):
             body=self.scenes[evt.new]
             self.setSceneBody(body)
         self.scene.param.watch(SafeCallback(onSceneChange),"value", onlychanged=True,queued=True)
+
+    # ----- 3D-safe box normalizer (from working 3D logic) -----
+    def _single_slice_logic_box(self, box):
+        """Normalize/clamp box; if pdim==3, force exactly 1 voxel along cross-axis."""
+        pdim = self.getPointDim()
+        dims = [int(it) for it in self.db.getLogicSize()]
+        p1, p2 = box
+
+        # order low/high
+        p1 = [min(p1[i], p2[i]) for i in range(len(dims))]
+        p2 = [max(p1[i], p2[i]) for i in range(len(dims))]
+
+        # integerize
+        p1 = [int(np.floor(p1[i])) for i in range(len(dims))]
+        p2 = [int(np.ceil (p2[i])) for i in range(len(dims))]
+
+        # clamp half-open bounds
+        p1 = [max(0, min(dims[i]-1, p1[i])) for i in range(len(dims))]
+        p2 = [max(p1[i]+1, min(dims[i],   p2[i])) for i in range(len(dims))]
+
+        if pdim == 3:
+            dir = self.direction.value
+            # derive slice index from offset and mapping
+            vt, vs = self.logic_to_physic[dir]
+            z = int(round((self.offset.value - vt) / vs))
+            z = max(0, min(dims[dir]-1, z))
+            p1[dir] = z
+            p2[dir] = z + 1
+
+        return [p1, p2]
 
     # ----- Layout helpers -----
     def build_middle_layout(self):
@@ -794,7 +824,7 @@ class Slice(param.Parameterized):
         self.scene.value=name
 
         # Fixed field
-        self.field.value = "2T"
+        self.field.value = "T"
         db_field = self.db.getField(self.field.value)
         self.metadata_range = [db_field.getDTypeRange().From, db_field.getDTypeRange().To]
 
@@ -853,7 +883,7 @@ class Slice(param.Parameterized):
         self.timestep_delta.value=int(scene.get("timestep-delta", 1))
         self.view_dependent.value = bool(scene.get('view-dependent', True))
 
-        resolution=int(scene.get("resolution", -6))
+        resolution=int(scene.get("resolution", -8))
         if resolution<0: resolution=self.db.getMaxResolution()+resolution
         self.resolution.end = self.db.getMaxResolution()
         self.resolution.value = resolution
@@ -1022,8 +1052,12 @@ class Slice(param.Parameterized):
         p1 = [(p1[I] - vt[I]) / vs[I] for I in range(pdim)]
         p2 = [(p2[I] - vt[I]) / vs[I] for I in range(pdim)]
         if pdim == 3:
-            p1[dir] = int((self.offset.value  - vt[dir]) / vs[dir])
-            p2[dir] = p1[dir]+1 
+            # force a single slice using offset -> logic z
+            z = int(round((self.offset.value - vt[dir]) / vs[dir]))
+            dims = [int(it) for it in self.db.getLogicSize()]
+            z = max(0, min(dims[dir]-1, z))
+            p1[dir] = z
+            p2[dir] = z + 1
         return [p1, p2]
 
     # ----- Playback -----
@@ -1121,7 +1155,11 @@ class Slice(param.Parameterized):
     def gotNewData(self, result):
         data=result['data']
 
-        # --- north-up rendering: flip latitude for display only ---
+        # Handle single-thickness 3D arrays that still come as (1,H,W)
+        if data.ndim == 3 and 1 in data.shape:
+            data = np.squeeze(data)
+
+        # north-up rendering: flip latitude for display only
         if data.ndim == 2:
             data = np.ascontiguousarray(data[::-1, :])
 
@@ -1208,6 +1246,9 @@ class Slice(param.Parameterized):
         query_logic_box=self.getQueryLogicBox()
         pdim=self.getPointDim()
 
+        # Normalize & force single slice for 3D (prevents segfaults)
+        query_logic_box = self._single_slice_logic_box(query_logic_box)
+
         self.aborted.setTrue()
         self.query_node.waitIdle()
         self.query_node2.waitIdle()
@@ -1241,7 +1282,7 @@ class Slice(param.Parameterized):
 			
         self.scene_body.value=json.dumps(self.getSceneBody(),indent=2)
         timestep=int(self.timestep.value)
-        field="2T"  # the only field
+        field="T"  # the only field
 
         box_i=[[int(it) for it in jt] for jt in query_logic_box]
         self.request.value=f"t={timestep} b={str(box_i).replace(' ','')} {canvas_w}x{canvas_h}"
@@ -1269,23 +1310,28 @@ class Slice(param.Parameterized):
         self.region_view.reset_view()
         x,y,w,h=evt.new
         z=int(self.offset.value)
+
+        # mirror Y to account for north-up display flip
         y_view_min = self.canvas.fig.y_range.start
         y_view_max = self.canvas.fig.y_range.end
-        y_inv = (y_view_min + y_view_max) - (y + h)   # same height, mirrored vertically
+        y_inv = (y_view_min + y_view_max) - (y + h)
 
         # Use the inverted-Y viewport for logic mapping / query
         logic_box = self.toLogic([x, y_inv, w, h])
+
+        # Normalize + single-slice for 3D
+        logic_box = self._single_slice_logic_box(logic_box)
+
         self.logic_box=logic_box
         print(f'---------------------SELECTED LOGIC BOX---------------- . {self.logic_box}')
         data=list(ovy.ExecuteBoxQuery(self.db, access=self.db.createAccess(), field=self.field.value,
                                       timestep=self.timestep.value,logic_box=logic_box,num_refinements=1))[0]["data"]
         self.selected_logic_box=self.logic_box
         self.selected_physic_box=[[x,x+w],[y,y+h]]
-       
         self.detailed_data=data
 
-        # north-up in popup too
-        data_flipped = np.ascontiguousarray(data[::-1, :])
+        # display north-up
+        data_flipped = np.ascontiguousarray(np.squeeze(data)[::-1, :])
         save_numpy_button = pn.widgets.Button(name='Save Data as Numpy', button_type='primary')
         download_script_button = pn.widgets.Button(name='Download Script', button_type='primary')
         apply_colormap_button = pn.widgets.Button(name='Replace Existing Range', button_type='primary')
@@ -1436,4 +1482,7 @@ np.savez('selected_data',data=data)
                 except: 
                     pass
             self.pushJobIfNeeded()
+
+# Back-compat alias
+Slices = Slice
 
