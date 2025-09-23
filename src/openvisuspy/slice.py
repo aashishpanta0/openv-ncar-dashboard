@@ -375,20 +375,30 @@ class Slice(param.Parameterized):
                 self.ai_insights_enabled = False
             self.main_layout[1] = self.build_middle_layout()
         self.generate_insights_button.on_click(toggle_ai_insights)
-
         def toggle_region(event):
-            if self.region_panel.visible or self.region_stats_panel.visible:
+            if self.regional_setting_enabled:
+        # TURN OFF
+                self.regional_setting_enabled = False
                 self.region_panel.visible = False
                 self.region_stats_panel.visible = False
                 self.region_button.name = "Turn on Regional Setting"
                 self.region_button.button_type = "success"
-                self.refresh()
             else:
+        # TURN ON
+                self.regional_setting_enabled = True
                 self.region_panel.visible = True
+                self.region_stats_panel.visible = False
                 self.region_stats_button.name = "Show Regional Stats"
                 self.region_button.name = "Turn off Regional Setting"
                 self.region_button.button_type = "danger"
+
+        # (Re)attach the subsetting view
                 self.region_panel[:] = [self.region_view.get_view()]
+
+    # Recompose the center of the page to include/exclude the right column
+            self.main_layout[1] = self.build_middle_layout()
+
+
         self.region_button.on_click(toggle_region)
 
         self.region_stats_button.param.watch(self.update_layout, 'value')
