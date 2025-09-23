@@ -36,70 +36,61 @@ class RegionalSubsetting:
 
         # Keep a handle to the image renderer (created on first call)
         self.image_renderer = None
-
     def set_latlon(self, climate_data, x=None, y=None, dw=None, dh=None):
         """
-        Update the region + image. Returns a dict with region & stats so callers
-        (e.g., slice.py) can consume details immediately.
+        Set the lat/lon (x, y) range and the 2D climate data to be plotted.
+        If x, y, dw, and dh are not provided, the previous values are used.
+        climate_data: 2D array (rows x cols) containing the climate data
+        x: Optional; x coordinate (longitude)
+        y: Optional; y coordinate (latitude)
+        dw: Optional; width of the data region (delta in x direction)
+        dh: Optional; height of the data region (delta in y direction)
         """
-        # Update stored region parameters if provided
-        if x is not None:  self.x = float(x)
-        if y is not None:  self.y = float(y)
-        if dw is not None: self.dw = float(dw)
-        if dh is not None: self.dh = float(dh)
+        # Update stored x, y, dw, and dh if provided, otherwise use previous values
+        if x is not None:
+            self.x = x
+        if y is not None:
+            self.y = y
+        if dw is not None:
+            self.dw = dw
+        if dh is not None:
+            self.dh = dh
 
-        # Ensure 2D float array; handle empty or all-NaN safely
-        arr = np.asarray(climate_data, dtype=float)
-        if arr.ndim != 2:
-            raise ValueError(f"climate_data must be 2D, got shape {arr.shape}")
+        # Calculate the new min and max for the data
+        new_min = np.nanmin(climate_data)
+        new_max = np.nanmax(climate_data)
 
-        # Compute new min/max robustly
-        if np.all(np.isnan(arr)):
-            new_min, new_max = 0.0, 0.0
-        else:
-            new_min = float(np.nanmin(arr))
-            new_max = float(np.nanmax(arr))
-            # If the tile is constant, widen a touch to avoid zero-range mapper
-            if new_min == new_max:
-                pad = 1e-12 if new_min == 0 else abs(new_min) * 1e-6
-                new_min -= pad
-                new_max += pad
-
-        # Initialize/extend global color limits
+        # If this is the first set, initialize previous min/max
         if self.previous_min is None or self.previous_max is None:
-            self.previous_min, self.previous_max = new_min, new_max
+            self.previous_min = new_min
+            self.previous_max = new_max
+
+        # Update the color mapper using the min of new and previous values
         self.mapper.low = min(new_min, self.previous_min)
         self.mapper.high = max(new_max, self.previous_max)
+
+        # Update the previous min and max for future calls
         self.previous_min = self.mapper.low
         self.previous_max = self.mapper.high
 
-        # Create or update the image glyph
-        if self.image_renderer is None:
-            self.image_renderer = self.subset_plot.image(
-                image=[arr],
-                x=self.x, y=self.y, dw=self.dw, dh=self.dh,
+        if len(self.subset_plot.renderers) > 0:
+            image_renderer = self.subset_plot.renderers[0]
+            image_renderer.data_source.data = {
+                'image': [climate_data],
+                'x': [self.x],
+                'y': [self.y],
+                'dw': [self.dw],
+                'dh': [self.dh]
+            }
+        else:
+            # If no renderer exists yet, create a new image renderer
+            self.subset_plot.image(
+                image=[climate_data], 
+                x=self.x, y=self.y, dw=self.dw, dh=self.dh, 
                 color_mapper=self.mapper
             )
-        else:
-            self.image_renderer.data_source.data = {
-                'image': [arr],
-                'x': [self.x], 'y': [self.y], 'dw': [self.dw], 'dh': [self.dh]
-            }
-
-        # Let ranges auto-fit the provided bbox
-        self.subset_plot.x_range = DataRange1d()
-        self.subset_plot.y_range = DataRange1d()
-
-        # Return details so callers can use them immediately
-        return {
-            "bbox": {"x": self.x, "y": self.y, "dw": self.dw, "dh": self.dh},
-            "stats": {"min": float(new_min), "max": float(new_max)},
-            "mapper": {"low": float(self.mapper.low), "high": float(self.mapper.high)},
-            "shape": arr.shape,
-            "all_nan": bool(np.all(np.isnan(arr)))
-        }
-
     def reset_view(self):
+
         """Clear the image and reset color scaling/state (keep colorbar)."""
         if self.image_renderer is not None:
             try:

@@ -47,7 +47,7 @@ DEFAULT_SHOW_OPTIONS = {
          "timestep_delta", "play_sec", "play_button", "palette", "color_mapper_type",
          "resolution", "view_dependent", "num_refinements", "show_probe"],
         ["take_screenshot_button", "range_mode", "range_min", "range_max",
-         "toggle_button", "region_button", "region_stats_button"]
+         "toggle_button", "region_button", "region_stats_button",'region_checkbox']
     ],
     "bottom": [
         ["request", "response"]
@@ -305,7 +305,7 @@ class Slice(param.Parameterized):
         self.color_mapper_type = pn.widgets.Select(name="Mapper", options=["linear", "log"], width=60)
 
         # Transport & misc
-        self.timestep_delta = pn.widgets.Select(name="Speed", options=[1, 2, 4, 8, 16, 32, 64, 128], value=1, width=50)
+        self.timestep_delta = pn.widgets.Select(name="Speed", options=[1, 2, 4, 8, 16,24, 32, 64, 128], value=1, width=50)
         self.play_button = pn.widgets.Button(name="Play", width=10, sizing_mode='stretch_width')
         self.play_sec = pn.widgets.Select(name="Frame delay", options=[0.00, 0.01, 0.1, 0.2, 0.1, 1, 2], value=0.01, width=120)
         self.request = pn.widgets.TextInput(name="", sizing_mode='stretch_width', disabled=False)
@@ -327,7 +327,8 @@ class Slice(param.Parameterized):
         self.region_panel = pn.Column(sizing_mode="stretch_both", visible=False)
         self.generate_insights_panel = pn.Column(sizing_mode="stretch_both", visible=False)
         self.insight_text = pn.widgets.TextAreaInput(value="", height=200, width=400, disabled=True, visible=False)
-
+        self.region_checkbox = pn.widgets.Checkbox(
+            name='Play Both?', visible=False, margin=(15, 10, 10, 50))
         # Logic backends
         self.stats_view = StatsView()
         self.region_stats_view = RegionalStatsView()
@@ -381,13 +382,17 @@ class Slice(param.Parameterized):
                 self.regional_setting_enabled = False
                 self.region_panel.visible = False
                 self.region_stats_panel.visible = False
+                self.region_stats_button.visible = False
+                self.region_checkbox.visible = False
                 self.region_button.name = "Turn on Regional Setting"
                 self.region_button.button_type = "success"
             else:
         # TURN ON
                 self.regional_setting_enabled = True
                 self.region_panel.visible = True
+                self.region_checkbox.visible = True
                 self.region_stats_panel.visible = False
+                self.region_stats_button.visible = True
                 self.region_stats_button.name = "Show Regional Stats"
                 self.region_button.name = "Turn off Regional Setting"
                 self.region_button.button_type = "danger"
@@ -1048,6 +1053,9 @@ class Slice(param.Parameterized):
         self.play.is_playing = True
         self.range_mode.value='user'
         self.play_button.name = "Stop"
+        if self.region_checkbox.value:
+            self.view_dependent.value=False
+            self.resolution.value=21
         self.play.t1 = time.time()
         self.play.wait_render_id = None
         self.play.num_refinements = self.num_refinements.value
@@ -1187,8 +1195,12 @@ class Slice(param.Parameterized):
         self.canvas.showData(data, self.toPhysic(logic_box), color_bar=self.color_bar)
         self.stats_view.set_data(data)
         try:
-            regional_data=data[int(self.selected_logic_box[0][1]):int(self.selected_logic_box[1][1]),
+            regional_raw=data[int(self.selected_logic_box[0][1]):int(self.selected_logic_box[1][1]),
                                int(self.selected_logic_box[0][0]):int(self.selected_logic_box[1][0])]
+            regional_data = np.ascontiguousarray(regional_raw[::-1, :])
+
+            if self.region_checkbox.value:
+                self.region_view.set_latlon(regional_data)
             if self.region_stats_panel.visible==True:
                 self.region_stats_view.set_data(regional_data)
         except: 
@@ -1439,8 +1451,12 @@ np.savez('selected_data',data=data)
                 self.gotNewData(result)
                 self.stats_view.set_data(result['data'])
                 try:
-                    regional_data=result['data'][int(self.selected_logic_box[0][1]):int(self.selected_logic_box[1][1]),
+                    regional_raw=result['data'][int(self.selected_logic_box[0][1]):int(self.selected_logic_box[1][1]),
                                                  int(self.selected_logic_box[0][0]):int(self.selected_logic_box[1][0])]
+                    regional_data = np.ascontiguousarray(regional_raw[::-1, :])
+
+                    if self.region_checkbox.value:
+                        self.region_view.set_latlon(regional_data)
                     if self.region_stats_panel.visible==True:
                         self.region_stats_view.set_data(regional_data)
                 except: 
